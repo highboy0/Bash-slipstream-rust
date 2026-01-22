@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==========================================
-# Slipstream Advanced Manager (Version 1.2.0)
+# Slipstream Advanced Manager (Optimized)
 # ==========================================
 
 set -e
@@ -44,20 +44,26 @@ enable_bbr() {
 download_binaries() {
     mkdir -p "$CONFIG_DIR"
     cd "$CONFIG_DIR"
-    whiptail --title "Downloading" --infobox "Fetching latest binaries from GitHub..." $HEIGHT $WIDTH
-    
-    RELEASE_DATA=$(curl -s https://api.github.com/repos/highboy0/Bash-slipstream-rust/releases/latest)
-    ASSET_URL=$(echo "$RELEASE_DATA" | jq -r '.assets[] | select(.name == "sliprstream.tar.gz") | .browser_download_url')
 
-    if [[ -z "$ASSET_URL" || "$ASSET_URL" == "null" ]]; then
-        whiptail --title "Error" --msgbox "Binary not found in GitHub Release." $HEIGHT $WIDTH
-        exit 1
+    # بررسی وجود فایل‌ها برای جلوگیری از دانلود مجدد
+    if [[ -f "$SERVER_BIN" && -f "$CLIENT_BIN" ]]; then
+        whiptail --title "Local Binaries Found" --msgbox "Project files already exist. Skipping download and using local binaries." $HEIGHT $WIDTH
+    else
+        whiptail --title "Downloading" --infobox "Files not found. Fetching binaries from GitHub..." $HEIGHT $WIDTH
+        
+        # آدرس مستقیم فایل (به جای چک کردن API برای آپدیت)
+        # نکته: آدرس زیر بر اساس ساختار قبلی شماست
+        RELEASE_URL="https://github.com/highboy0/Bash-slipstream-rust/releases/latest/download/sliprstream.tar.gz"
+
+        if curl -L -o slipstream.tar.gz "$RELEASE_URL"; then
+            tar -xzf slipstream.tar.gz
+            rm slipstream.tar.gz
+            chmod +x slipstream-server slipstream-client
+        else
+            whiptail --title "Error" --msgbox "Failed to download binaries. Please check your internet connection." $HEIGHT $WIDTH
+            exit 1
+        fi
     fi
-
-    curl -L -o slipstream.tar.gz "$ASSET_URL"
-    tar -xzf slipstream.tar.gz
-    rm slipstream.tar.gz
-    chmod +x slipstream-server slipstream-client
 }
 
 free_port_53() {
@@ -136,7 +142,6 @@ test_speed() {
     DOMAIN=$(jq -r '.domain' "$CONFIG_FILE")
     LATENCY=$(dig +short +time=2 +tries=1 @127.0.0.1 -p 53 google.com | grep -oE "[0-9]+") || true
     
-    # Simple ping test to common resolver through the tunnel
     RES=$(ping -c 3 8.8.8.8 | tail -1 | awk '{print $4}' | cut -d '/' -f 2)
     
     whiptail --title "Benchmark Result" --msgbox "Tunnel Domain: $DOMAIN\n\nAvg Ping Latency: ${RES}ms" $HEIGHT $WIDTH
@@ -173,7 +178,6 @@ initial_setup() {
         create_service server
     else
         LISTEN_PORT=$(whiptail --title "Listen Port" --inputbox "Local listen port:" $HEIGHT $WIDTH "443" 3>&1 1>&2 2>&3)
-        # Adding default resolver (8.8.8.8) for quick setup
         echo "{\"type\": \"client\", \"domain\": \"$DOMAIN\", \"listen_port\": \"$LISTEN_PORT\", \"resolvers\": [\"8.8.8.8:53\"]}" > "$CONFIG_FILE"
         create_service client
     fi
@@ -184,7 +188,7 @@ main_menu() {
     while true; do
         BANNER=$(get_status_banner)
         CHOICE=$(whiptail --title "Slipstream Manager v1.2" --menu "$BANNER\n\nChoose an option:" $HEIGHT $WIDTH $MENU_HEIGHT \
-            "1" "Full Setup / Reinstall" \
+            "1" "Full Setup (Check Local Files First)" \
             "2" "View Live Logs" \
             "3" "Test Tunnel Latency" \
             "4" "Enable BBR Optimization" \
@@ -198,12 +202,18 @@ main_menu() {
             3) test_speed ;;
             4) enable_bbr ;;
             5) 
-               type=$(jq -r '.type' "$CONFIG_FILE")
-               status=$(systemctl status "slipstream-$type.service" --no-pager -l)
-               whiptail --title "Systemd Status" --scrolltext --msgbox "$status" $HEIGHT $WIDTH ;;
+               if [[ -f "$CONFIG_FILE" ]]; then
+                   type=$(jq -r '.type' "$CONFIG_FILE")
+                   status=$(systemctl status "slipstream-$type.service" --no-pager -l)
+                   whiptail --title "Systemd Status" --scrolltext --msgbox "$status" $HEIGHT $WIDTH
+               else
+                   whiptail --title "Error" --msgbox "Service not configured." $HEIGHT $WIDTH
+               fi ;;
             6) 
-               if whiptail --yesno "Uninstall everything?" $HEIGHT $WIDTH; then
-                   rm -rf "$CONFIG_DIR"; systemctl stop slipstream-server slipstream-client >/dev/null 2>&1 || true
+               if whiptail --yesno "Uninstall everything (including binaries)?" $HEIGHT $WIDTH; then
+                   systemctl stop slipstream-server slipstream-client >/dev/null 2>&1 || true
+                   systemctl disable slipstream-server slipstream-client >/dev/null 2>&1 || true
+                   rm -rf "$CONFIG_DIR"
                    whiptail --msgbox "Uninstalled." $HEIGHT $WIDTH
                fi ;;
             7) clear; exit 0 ;;
