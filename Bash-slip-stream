@@ -26,8 +26,8 @@ download_binaries() {
 
     if whiptail --title "دانلود باینری" --yesno "آخرین نسخه Slipstream را دانلود کنیم؟" $HEIGHT $WIDTH; then
         whiptail --title "در حال دانلود" --infobox "در حال دریافت آخرین نسخه..." $HEIGHT $WIDTH
-        LATEST=$(curl -s https://api.github.com/repos/MortezaBashsiz/slipstream/releases/latest | jq -r '.tag_name')
-        ASSET_URL=$(curl -s https://api.github.com/repos/MortezaBashsiz/slipstream/releases/latest | jq -r '.assets[] | select(.name | contains("linux-amd64")) | .browser_download_url')
+        LATEST=$(curl -s https://github.com/highboy0/Bash-slipstream-rust/blob/main/sliprstream.tar.gz | jq -r '.tag_name')
+        ASSET_URL=$(curl -s https://github.com/highboy0/Bash-slipstream-rust/blob/main/sliprstream.tar.gz | jq -r '.assets[] | select(.name | contains("linux-amd64")) | .browser_download_url')
 
         if [[ -z "$ASSET_URL" ]]; then
             whiptail --title "خطا" --msgbox "باینری linux-amd64 پیدا نشد.\nلطفاً دستی دانلود کنید." $HEIGHT $WIDTH
