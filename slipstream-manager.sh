@@ -114,7 +114,7 @@ extract_local_binaries() {
         tar -xzf "$LOCAL_TAR" -C "$CONFIG_DIR"
         chmod +x "$SERVER_BIN" "$CLIENT_BIN" 2>/dev/null || true
     else
-        whiptail --title "Error" --msgbox "File slipstream-*.tar.gz not found in $SCRIPT_DIR" $HEIGHT $WIDTH
+        whiptail --title "Error" --msgbox "File sliprstream-*.tar.gz not found in $SCRIPT_DIR" $HEIGHT $WIDTH
         exit 1
     fi
 }
