@@ -108,13 +108,13 @@ EOF
 
 extract_local_binaries() {
     mkdir -p "$CONFIG_DIR"
-    LOCAL_TAR=$(find "$SCRIPT_DIR" -name "slipstream.tar.gz" | head -n 1)
+    LOCAL_TAR=$(find "$SCRIPT_DIR" -name "sliprstream.tar.gz" | head -n 1)
 
     if [[ -f "$LOCAL_TAR" ]]; then
         tar -xzf "$LOCAL_TAR" -C "$CONFIG_DIR"
         chmod +x "$SERVER_BIN" "$CLIENT_BIN" 2>/dev/null || true
     else
-        whiptail --title "Error" --msgbox "File sliprstream-*.tar.gz not found in $SCRIPT_DIR" $HEIGHT $WIDTH
+        whiptail --title "Error" --msgbox "File sliprstream.tar.gz not found in $SCRIPT_DIR" $HEIGHT $WIDTH
         exit 1
     fi
 }
