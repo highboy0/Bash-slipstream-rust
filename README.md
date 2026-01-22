@@ -1,4 +1,3 @@
-```markdown
 # Slipstream Manager 🚀
 
 ![Slipstream Banner](https://via.placeholder.com/1200x600/0d1117/ffffff?text=Slipstream+DNS+Tunnel+Manager+%F0%9F%94%92+%F0%9F%9A%80)  
