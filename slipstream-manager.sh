@@ -108,7 +108,7 @@ EOF
 
 extract_local_binaries() {
     mkdir -p "$CONFIG_DIR"
-    LOCAL_TAR=$(find "$SCRIPT_DIR" -name "slipstream-*.tar.gz" | head -n 1)
+    LOCAL_TAR=$(find "$SCRIPT_DIR" -name "slipstream.tar.gz" | head -n 1)
 
     if [[ -f "$LOCAL_TAR" ]]; then
         tar -xzf "$LOCAL_TAR" -C "$CONFIG_DIR"
