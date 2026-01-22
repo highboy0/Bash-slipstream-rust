@@ -25,22 +25,39 @@ download_binaries() {
     cd "$CONFIG_DIR"
 
     if whiptail --title "دانلود باینری" --yesno "آخرین نسخه Slipstream را دانلود کنیم؟" $HEIGHT $WIDTH; then
-        whiptail --title "در حال دانلود" --infobox "در حال دریافت آخرین نسخه..." $HEIGHT $WIDTH
-        LATEST=$(curl -s https://github.com/highboy0/Bash-slipstream-rust/blob/main/sliprstream.tar.gz | jq -r '.tag_name')
-        ASSET_URL=$(curl -s https://github.com/highboy0/Bash-slipstream-rust/blob/main/sliprstream.tar.gz | jq -r '.assets[] | select(.name | contains("linux-amd64")) | .browser_download_url')
+        whiptail --title "در حال دانلود" --infobox "در حال دریافت اطلاعات آخرین نسخه..." $HEIGHT $WIDTH
+        
+        # 1. استفاده از API گیت‌هاب برای دریافت اطلاعات آخرین ریلیز
+        RELEASE_DATA=$(curl -s https://api.github.com/repos/highboy0/Bash-slipstream-rust/releases/latest)
+        
+        # 2. استخراج لینک دانلود مستقیم (بر اساس نام فایلی که در ریلیز گذاشتید)
+        # نکته: در لینک شما نام فایل sliprstream.tar.gz است (یک r اضافه دارد)
+        ASSET_URL=$(echo "$RELEASE_DATA" | jq -r '.assets[] | select(.name == "sliprstream.tar.gz") | .browser_download_url')
 
-        if [[ -z "$ASSET_URL" ]]; then
-            whiptail --title "خطا" --msgbox "باینری linux-amd64 پیدا نشد.\nلطفاً دستی دانلود کنید." $HEIGHT $WIDTH
+        if [[ -z "$ASSET_URL" || "$ASSET_URL" == "null" ]]; then
+            whiptail --title "خطا" --msgbox "فایل sliprstream.tar.gz در ریلیز یافت نشد.\nلطفاً آدرس ریلیز را بررسی کنید." $HEIGHT $WIDTH
             exit 1
         fi
 
+        # دانلود فایل
         curl -L -o slipstream.tar.gz "$ASSET_URL"
-        tar -xzf slipstream.tar.gz --strip-components=0
+        
+        # استخراج فایل
+        # اگر در فایل tar.gz شما پوشه وجود ندارد، --strip-components=0 درست است
+        tar -xzf slipstream.tar.gz
+        
         rm slipstream.tar.gz
-        chmod +x slipstream-server slipstream-client
-        whiptail --title "موفقیت" --msgbox "دانلود و استخراج با موفقیت انجام شد." $HEIGHT $WIDTH
+        
+        # بررسی وجود فایل‌ها و تغییر سطح دسترسی
+        if [[ -f "slipstream-server" ]]; then
+            chmod +x slipstream-server slipstream-client
+            whiptail --title "موفقیت" --msgbox "دانلود و استخراج با موفقیت انجام شد." $HEIGHT $WIDTH
+        else
+            whiptail --title "خطا" --msgbox "فایل‌های اجرایی در آرشیو یافت نشدند." $HEIGHT $WIDTH
+        fi
     fi
 }
+
 
 # ساخت گواهی
 generate_cert() {
