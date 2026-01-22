@@ -1,78 +1,127 @@
 #!/bin/bash
 
-# ==========================================
-# Slipstream Advanced Manager (Optimized)
-# ==========================================
-
+# خروج در صورت بروز خطا
 set -e
 
-# Colors for terminal output
-GREEN='\033[0;32m'
-NC='\033[0m'
-
-# Check dependencies
-if ! command -v whiptail &> /dev/null || ! command -v jq &> /dev/null; then
-    apt update && apt install -y whiptail curl jq openssl dnsutils bc
+# بررسی دسترسی روت
+if [[ $EUID -ne 0 ]]; then
+   echo "Error: Please run as root (sudo)."
+   exit 1
 fi
 
+# نصب پیش‌نیازها
+if ! command -v whiptail &> /dev/null || ! command -v jq &> /dev/null; then
+    apt update && apt install -y whiptail curl jq openssl tar
+fi
+
+# تنظیمات مسیرها
+SCRIPT_DIR="$(pwd)"
 CONFIG_DIR="/opt/slipstream"
-CONFIG_FILE="$CONFIG_DIR/config.ini"
+CONFIG_FILE="$CONFIG_DIR/config.json"
 SERVER_BIN="$CONFIG_DIR/slipstream-server"
 CLIENT_BIN="$CONFIG_DIR/slipstream-client"
 CERT_FILE="$CONFIG_DIR/cert.pem"
 KEY_FILE="$CONFIG_DIR/key.pem"
+SYSCTL_CONF="/etc/sysctl.d/99-slipstream-opt.conf"
 
 HEIGHT=20
 WIDTH=78
 MENU_HEIGHT=12
 
-# --- Optimization Functions ---
+# ----------------------------------------------------------------
+# بخش مدیریت زبان (FA/EN)
+# ----------------------------------------------------------------
+declare -A T
 
-enable_bbr() {
-    if ! grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf; then
-        echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
-        echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-        sysctl -p
-        whiptail --title "BBR Optimization" --msgbox "TCP BBR has been enabled successfully!" $HEIGHT $WIDTH
+select_language() {
+    LANG_CHOICE=$(whiptail --title "Language / زبان" --menu "Choose your language:" $HEIGHT $WIDTH 2 \
+        "en" "English" \
+        "fa" "فارسی" 3>&1 1>&2 2>&3)
+
+    if [[ "$LANG_CHOICE" == "fa" ]]; then
+        T[title]="مدیریت Slipstream"
+        T[welcome]="به اسکریپت مدیریت Slipstream خوش آمدید."
+        T[main_menu]="منوی اصلی - گزینه مورد نظر را انتخاب کنید:"
+        T[opt1]="نصب و راه‌اندازی (Install)"
+        T[opt2]="مدیریت Resolverها"
+        T[opt3]="وضعیت سرویس"
+        T[opt4]="مشاهده لاگ‌ها (Live)"
+        T[opt5]="بهینه‌سازی سیستم (TCP/BBR)"
+        T[opt6]="حذف کامل (Uninstall)"
+        T[opt7]="خروج"
+        T[ask_tweak]="آیا مایل هستید بهینه‌سازی‌های شبکه (TCP/BBR) برای افزایش سرعت اعمال شود؟"
+        T[success]="عملیات با موفقیت انجام شد."
+        T[err_no_config]="ابتدا باید نصب را انجام دهید."
+        T[wait]="لطفا منتظر بمانید..."
+        T[ask_domain]="دامنه NS را وارد کنید:"
+        T[ask_port]="پورت را وارد کنید:"
     else
-        whiptail --title "BBR Optimization" --msgbox "BBR is already enabled." $HEIGHT $WIDTH
+        T[title]="Slipstream Manager"
+        T[welcome]="Welcome to Slipstream Management Script."
+        T[main_menu]="Main Menu - Choose an option:"
+        T[opt1]="Install/Setup"
+        T[opt2]="Manage Resolvers"
+        T[opt3]="Service Status"
+        T[opt4]="View Live Logs"
+        T[opt5]="System Optimization (TCP/BBR)"
+        T[opt6]="Uninstall"
+        T[opt7]="Exit"
+        T[ask_tweak]="Do you want to apply Network Optimizations (TCP/BBR) for better speed?"
+        T[success]="Operation completed successfully."
+        T[err_no_config]="Please run setup first."
+        T[wait]="Please wait..."
+        T[ask_domain]="Enter NS Domain:"
+        T[ask_port]="Enter Port:"
     fi
 }
 
-# --- Core Functions ---
+# ----------------------------------------------------------------
+# بهینه‌سازی دائمی شبکه
+# ----------------------------------------------------------------
 
-download_binaries() {
+apply_network_tweaks() {
+    whiptail --title "${T[title]}" --infobox "${T[wait]}" $HEIGHT $WIDTH
+    
+    # تنظیمات برای پایداری و سرعت (دائمی)
+    cat <<EOF > "$SYSCTL_CONF"
+# Slipstream Network Optimizations
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+net.ipv4.tcp_rmem=4096 87380 16777216
+net.ipv4.tcp_wmem=4096 65536 16777216
+net.ipv4.tcp_slow_start_after_idle=0
+net.ipv4.tcp_fastopen=3
+net.ipv4.udp_rmem_min=8192
+net.ipv4.udp_wmem_min=8192
+net.ipv4.ip_forward=1
+EOF
+    # اعمال تغییرات بدون نیاز به ریبوت
+    sysctl -p "$SYSCTL_CONF" >/dev/null 2>&1 || true
+    whiptail --title "${T[title]}" --msgbox "${T[success]}" $HEIGHT $WIDTH
+}
+
+# ----------------------------------------------------------------
+# مدیریت فایل‌ها و سرویس
+# ----------------------------------------------------------------
+
+extract_local_binaries() {
     mkdir -p "$CONFIG_DIR"
-    cd "$CONFIG_DIR"
+    LOCAL_TAR=$(find "$SCRIPT_DIR" -name "slipstream-*.tar.gz" | head -n 1)
 
-    # بررسی وجود فایل‌ها برای جلوگیری از دانلود مجدد
-    if [[ -f "$SERVER_BIN" && -f "$CLIENT_BIN" ]]; then
-        whiptail --title "Local Binaries Found" --msgbox "Project files already exist. Skipping download and using local binaries." $HEIGHT $WIDTH
+    if [[ -f "$LOCAL_TAR" ]]; then
+        tar -xzf "$LOCAL_TAR" -C "$CONFIG_DIR"
+        chmod +x "$SERVER_BIN" "$CLIENT_BIN" 2>/dev/null || true
     else
-        whiptail --title "Downloading" --infobox "Files not found. Fetching binaries from GitHub..." $HEIGHT $WIDTH
-        
-        # آدرس مستقیم فایل (به جای چک کردن API برای آپدیت)
-        # نکته: آدرس زیر بر اساس ساختار قبلی شماست
-        RELEASE_URL="https://github.com/highboy0/Bash-slipstream-rust/releases/latest/download/sliprstream.tar.gz"
-
-        if curl -L -o slipstream.tar.gz "$RELEASE_URL"; then
-            tar -xzf slipstream.tar.gz
-            rm slipstream.tar.gz
-            chmod +x slipstream-server slipstream-client
-        else
-            whiptail --title "Error" --msgbox "Failed to download binaries. Please check your internet connection." $HEIGHT $WIDTH
-            exit 1
-        fi
+        whiptail --title "Error" --msgbox "File slipstream-*.tar.gz not found in $SCRIPT_DIR" $HEIGHT $WIDTH
+        exit 1
     fi
-}
-
-free_port_53() {
-    systemctl stop systemd-resolved >/dev/null 2>&1 || true
-    systemctl disable systemd-resolved >/dev/null 2>&1 || true
 }
 
 create_service() {
     local type=$1
+    local silent=$2
     local service_name="slipstream-$type"
     local service_file="/etc/systemd/system/$service_name.service"
 
@@ -87,15 +136,14 @@ Type=simple
 WorkingDirectory=$CONFIG_DIR
 ExecStart=$SERVER_BIN --dns-listen-port 53 --target-address 127.0.0.1:$(jq -r '.inbound_port' "$CONFIG_FILE") --domain $(jq -r '.domain' "$CONFIG_FILE") --cert $CERT_FILE --key $KEY_FILE
 Restart=always
-RestartSec=5
-User=root
 LimitNOFILE=1048576
 
 [Install]
 WantedBy=multi-user.target
 EOF
     else
-        local resolvers=$(jq -r '.resolvers[]' "$CONFIG_FILE" | sed 's/^/--resolver /' | paste -sd " " -)
+        local r_cmd=""
+        while read -r line; do r_cmd="$r_cmd --resolver $line"; done < <(jq -r '.resolvers[]' "$CONFIG_FILE")
         cat > "$service_file" <<EOF
 [Unit]
 Description=Slipstream Client
@@ -104,10 +152,8 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=$CONFIG_DIR
-ExecStart=$CLIENT_BIN --tcp-listen-port $(jq -r '.listen_port' "$CONFIG_FILE") $resolvers --domain $(jq -r '.domain' "$CONFIG_FILE")
+ExecStart=$CLIENT_BIN --tcp-listen-port $(jq -r '.listen_port' "$CONFIG_FILE") $r_cmd --domain $(jq -r '.domain' "$CONFIG_FILE")
 Restart=always
-RestartSec=5
-User=root
 LimitNOFILE=1048576
 
 [Install]
@@ -116,110 +162,130 @@ EOF
     fi
 
     systemctl daemon-reload
-    systemctl enable "$service_name.service" >/dev/null 2>&1
-    systemctl restart "$service_name.service" >/dev/null 2>&1
+    systemctl enable "$service_name" >/dev/null 2>&1
+    systemctl restart "$service_name" >/dev/null 2>&1
+    [[ "$silent" != "silent" ]] && whiptail --title "${T[title]}" --msgbox "${T[success]}" $HEIGHT $WIDTH
 }
 
-# --- Utility Functions ---
+# ----------------------------------------------------------------
+# مدیریت Resolverها
+# ----------------------------------------------------------------
 
-view_logs() {
-    if [[ -f "$CONFIG_FILE" ]]; then
-        type=$(jq -r '.type' "$CONFIG_FILE")
-        whiptail --title "Live Logs" --msgbox "Showing live logs. Press Ctrl+C to exit and return to menu." $HEIGHT $WIDTH
-        clear
-        journalctl -u "slipstream-$type.service" -f
-    else
-        whiptail --title "Error" --msgbox "Setup not found!" $HEIGHT $WIDTH
-    fi
-}
-
-test_speed() {
+manage_resolvers() {
     if [[ ! -f "$CONFIG_FILE" ]]; then
-        whiptail --title "Error" --msgbox "Service must be running to test latency." $HEIGHT $WIDTH
+        whiptail --title "${T[title]}" --msgbox "${T[err_no_config]}" $HEIGHT $WIDTH
         return
     fi
-    whiptail --title "Latency Test" --infobox "Testing DNS tunnel response time..." $HEIGHT $WIDTH
-    DOMAIN=$(jq -r '.domain' "$CONFIG_FILE")
-    LATENCY=$(dig +short +time=2 +tries=1 @127.0.0.1 -p 53 google.com | grep -oE "[0-9]+") || true
-    
-    RES=$(ping -c 3 8.8.8.8 | tail -1 | awk '{print $4}' | cut -d '/' -f 2)
-    
-    whiptail --title "Benchmark Result" --msgbox "Tunnel Domain: $DOMAIN\n\nAvg Ping Latency: ${RES}ms" $HEIGHT $WIDTH
-}
 
-get_status_banner() {
-    if [[ -f "$CONFIG_FILE" ]]; then
-        type=$(jq -r '.type' "$CONFIG_FILE")
-        if systemctl is-active --quiet "slipstream-$type.service"; then
-            echo "Status: [ ACTIVE ] | Role: [ $type ] | Domain: [ $(jq -r '.domain' "$CONFIG_FILE") ]"
-        else
-            echo "Status: [ INACTIVE ] | Role: [ $type ]"
-        fi
-    else
-        echo "Status: [ NOT CONFIGURED ]"
-    fi
-}
-
-# --- Menus ---
-
-initial_setup() {
-    SERVER_TYPE=$(whiptail --title "Server Type" --menu "Choose your role:" $HEIGHT $WIDTH 2 \
-        "kharej" "Exit Server (Outside)" \
-        "iran"  "Bridge Server (Iran)" 3>&1 1>&2 2>&3)
-
-    download_binaries
-    DOMAIN=$(whiptail --title "Domain" --inputbox "Enter NS domain:" $HEIGHT $WIDTH "ns.xraychannel.com" 3>&1 1>&2 2>&3)
-
-    if [[ "$SERVER_TYPE" == "kharej" ]]; then
-        INBOUND_PORT=$(whiptail --title "Inbound Port" --inputbox "Target port (e.g. 10000):" $HEIGHT $WIDTH "10000" 3>&1 1>&2 2>&3)
-        openssl req -x509 -newkey rsa:2048 -nodes -keyout "$KEY_FILE" -out "$CERT_FILE" -days 365 -subj "/CN=$DOMAIN" >/dev/null 2>&1
-        free_port_53
-        echo "{\"type\": \"server\", \"domain\": \"$DOMAIN\", \"inbound_port\": \"$INBOUND_PORT\"}" > "$CONFIG_FILE"
-        create_service server
-    else
-        LISTEN_PORT=$(whiptail --title "Listen Port" --inputbox "Local listen port:" $HEIGHT $WIDTH "443" 3>&1 1>&2 2>&3)
-        echo "{\"type\": \"client\", \"domain\": \"$DOMAIN\", \"listen_port\": \"$LISTEN_PORT\", \"resolvers\": [\"8.8.8.8:53\"]}" > "$CONFIG_FILE"
-        create_service client
-    fi
-    whiptail --title "Success" --msgbox "Setup completed and service started!" $HEIGHT $WIDTH
-}
-
-main_menu() {
     while true; do
-        BANNER=$(get_status_banner)
-        CHOICE=$(whiptail --title "Slipstream Manager v1.2" --menu "$BANNER\n\nChoose an option:" $HEIGHT $WIDTH $MENU_HEIGHT \
-            "1" "Full Setup (Check Local Files First)" \
-            "2" "View Live Logs" \
-            "3" "Test Tunnel Latency" \
-            "4" "Enable BBR Optimization" \
-            "5" "Service Status (Detailed)" \
-            "6" "Uninstall" \
-            "7" "Exit" 3>&1 1>&2 2>&3)
+        CURRENT_RES=$(jq -r '.resolvers | join(", ")' "$CONFIG_FILE")
+        RES_CHOICE=$(whiptail --title "${T[opt2]}" --menu "Current: [$CURRENT_RES]" $HEIGHT $WIDTH 3 \
+            "1" "Add New" \
+            "2" "Remove" \
+            "3" "Back" 3>&1 1>&2 2>&3)
 
-        case $CHOICE in
-            1) initial_setup ;;
-            2) view_logs ;;
-            3) test_speed ;;
-            4) enable_bbr ;;
-            5) 
-               if [[ -f "$CONFIG_FILE" ]]; then
-                   type=$(jq -r '.type' "$CONFIG_FILE")
-                   status=$(systemctl status "slipstream-$type.service" --no-pager -l)
-                   whiptail --title "Systemd Status" --scrolltext --msgbox "$status" $HEIGHT $WIDTH
-               else
-                   whiptail --title "Error" --msgbox "Service not configured." $HEIGHT $WIDTH
-               fi ;;
-            6) 
-               if whiptail --yesno "Uninstall everything (including binaries)?" $HEIGHT $WIDTH; then
-                   systemctl stop slipstream-server slipstream-client >/dev/null 2>&1 || true
-                   systemctl disable slipstream-server slipstream-client >/dev/null 2>&1 || true
-                   rm -rf "$CONFIG_DIR"
-                   whiptail --msgbox "Uninstalled." $HEIGHT $WIDTH
-               fi ;;
-            7) clear; exit 0 ;;
-            *) clear; exit 0 ;;
+        case $RES_CHOICE in
+            1)
+                NEW_IP=$(whiptail --title "Add" --inputbox "IP:Port (e.g. 1.1.1.1:53):" $HEIGHT $WIDTH 3>&1 1>&2 2>&3)
+                [[ -n "$NEW_IP" ]] && jq ".resolvers += [\"$NEW_IP\"]" "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+                ;;
+            2)
+                mapfile -t RES_LIST < <(jq -r '.resolvers[]' "$CONFIG_FILE")
+                OPTIONS=()
+                for i in "${!RES_LIST[@]}"; do OPTIONS+=("$i" "${RES_LIST[$i]}"); done
+                DEL_INDEX=$(whiptail --title "Remove" --menu "Select to delete:" $HEIGHT $WIDTH $MENU_HEIGHT "${OPTIONS[@]}" 3>&1 1>&2 2>&3)
+                [[ -n "$DEL_INDEX" ]] && jq "del(.resolvers[$DEL_INDEX])" "$CONFIG_FILE" > "${CONFIG_FILE}.tmp" && mv "${CONFIG_FILE}.tmp" "$CONFIG_FILE"
+                ;;
+            *) break ;;
         esac
+        create_service client "silent"
     done
 }
 
-main_menu
+# ----------------------------------------------------------------
+# نصب اولیه
+# ----------------------------------------------------------------
+
+initial_setup() {
+    TYPE=$(whiptail --title "${T[opt1]}" --menu "${T[welcome]}" $HEIGHT $WIDTH 2 \
+        "kharej" "External Server (Kharej)" \
+        "iran"  "Iran Client (Iran)" 3>&1 1>&2 2>&3)
+
+    [[ -z "$TYPE" ]] && return
+    
+    extract_local_binaries
+
+    if whiptail --title "${T[title]}" --yesno "${T[ask_tweak]}" $HEIGHT $WIDTH; then
+        apply_network_tweaks
+    fi
+
+    DOMAIN=$(whiptail --title "Domain" --inputbox "${T[ask_domain]}" $HEIGHT $WIDTH "ns.example.com" 3>&1 1>&2 2>&3)
+
+    if [[ "$TYPE" == "kharej" ]]; then
+        PORT=$(whiptail --title "Port" --inputbox "${T[ask_port]}" $HEIGHT $WIDTH "10000" 3>&1 1>&2 2>&3)
+        # آزاد کردن پورت 53
+        systemctl stop systemd-resolved || true
+        systemctl disable systemd-resolved || true
+        # تولید گواهی
+        openssl req -x509 -newkey rsa:2048 -nodes -keyout "$KEY_FILE" -out "$CERT_FILE" -days 365 -subj "/CN=$DOMAIN" >/dev/null 2>&1
+        echo "{ \"type\": \"server\", \"domain\": \"$DOMAIN\", \"inbound_port\": \"$PORT\" }" > "$CONFIG_FILE"
+        create_service server
+    else
+        L_PORT=$(whiptail --title "Listen Port" --inputbox "${T[ask_port]}" $HEIGHT $WIDTH "443" 3>&1 1>&2 2>&3)
+        echo "{ \"type\": \"client\", \"domain\": \"$DOMAIN\", \"listen_port\": \"$L_PORT\", \"resolvers\": [\"8.8.8.8:53\"] }" > "$CONFIG_FILE"
+        create_service client
+    fi
+}
+
+# ----------------------------------------------------------------
+# شروع اصلی برنامه
+# ----------------------------------------------------------------
+
+select_language
+
+while true; do
+    CHOICE=$(whiptail --title "${T[title]}" --menu "${T[main_menu]}" $HEIGHT $WIDTH $MENU_HEIGHT \
+        "1" "${T[opt1]}" \
+        "2" "${T[opt2]}" \
+        "3" "${T[opt3]}" \
+        "4" "${T[opt4]}" \
+        "5" "${T[opt5]}" \
+        "6" "${T[opt6]}" \
+        "7" "${T[opt7]}" 3>&1 1>&2 2>&3)
+
+    case $CHOICE in
+        1) initial_setup ;;
+        2) manage_resolvers ;;
+        3) 
+            if [[ -f "$CONFIG_FILE" ]]; then
+                type=$(jq -r '.type' "$CONFIG_FILE")
+                status=$(systemctl status "slipstream-$type" --no-pager | head -n 15)
+                whiptail --title "${T[opt3]}" --msgbox "$status" $HEIGHT $WIDTH
+            else
+                whiptail --msgbox "${T[err_no_config]}" $HEIGHT $WIDTH
+            fi
+            ;;
+        4) 
+            if [[ -f "$CONFIG_FILE" ]]; then
+                type=$(jq -r '.type' "$CONFIG_FILE")
+                clear
+                echo "Press Ctrl+C to exit logs..."
+                journalctl -u "slipstream-$type" -f -n 50
+            else
+                whiptail --msgbox "${T[err_no_config]}" $HEIGHT $WIDTH
+            fi
+            ;;
+        5) apply_network_tweaks ;;
+        6) 
+            if whiptail --title "Uninstall" --yesno "Are you sure?" $HEIGHT $WIDTH; then
+                systemctl stop slipstream-server slipstream-client 2>/dev/null || true
+                systemctl disable slipstream-server slipstream-client 2>/dev/null || true
+                rm -rf "$CONFIG_DIR" /etc/systemd/system/slipstream-*.service "$SYSCTL_CONF"
+                systemctl daemon-reload
+                whiptail --msgbox "${T[success]}" $HEIGHT $WIDTH
+            fi
+            ;;
+        7) exit 0 ;;
+        *) exit 0 ;;
+    esac
+done
